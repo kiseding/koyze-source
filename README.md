@@ -1,8 +1,7 @@
-# lx-music-source
+lx-music-source
 洛雪音乐源，内容源于网络
 
-
-## 在线导入 - 加速链接
+在线导入 - 加速链接
 
 ### xunhuisi
 ```
