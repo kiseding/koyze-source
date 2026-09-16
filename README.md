@@ -4,7 +4,8 @@
 
 ## 在线导入 - 加速链接
 
-xunhuisi
+### xunhuisi
+```
 https://ghproxy.net/raw.githubusercontent.com/kiseding/xunhuisiapi/refs/heads/main/%E5%B7%A1%E5%9B%9E%E5%AF%BA-%E4%BB%85tx-128k-320k.js
 
 
@@ -18,7 +19,7 @@ https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/flower/
 ```
 ### LX
 ```
-https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/lx/latest.js
+https://ghproxy.net/raw.githubusercontent.com/kiseding/koyze-source/refs/heads/main/lx-music-source.js
 ```
 ### Grass
 ```
