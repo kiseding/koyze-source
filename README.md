@@ -3,7 +3,7 @@ lx-music-source
 
 在线导入 - 加速链接
 
-koyze
+xunhuisi
 https://ghproxy.net/raw.githubusercontent.com/kiseding/koyze-source/refs/heads/main/koyze-source.js
 
 Huibq
@@ -41,8 +41,10 @@ https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/qdy/lat
 部分数据来源
 @pdone
 @Suxiaoqinx/Netease_url
+@CharlesPikachu/musicdl
 
 巡回寺脚本当前能力：
 - QQ（tx）：巡回寺 API，128k / 320k，含歌词
 - 网易云（wy）：Netease_url 公开实例 `nextmusic.toubiec.cn`，128k / 320k / flac / hires，含歌词
   自建时把脚本里的 `WY_API_BASE` 改成你的服务地址，会回退到原版 `/song`
+- 酷我（kw）：musicdl 官方 DES `convert_url2` 解 flac / 128k，320k 走公开解析；歌词走酷我 openapi JSON；不解密 mgg/mflac
