@@ -1,7 +1,7 @@
 /*!
  * @name 巡回寺 QQ + 网易云 + 酷我
- * @description 巡回寺解析 QQ；Netease_url 解析网易云；musicdl 酷我官方 convert_url2（DES）解析可播 flac/mp3，320k 走公开解析，歌词走酷我 openapi
- * @version 1.2.0
+ * @description 巡回寺解析 QQ；Netease_url 解析网易云；musicdl 酷我官方 convert_url2（DES）解析可播 flac/320k/128k，歌词走酷我 openapi
+ * @version 1.2.1
  * @author kiseding
  *
  * 网易云走 Suxiaoqinx/Netease_url：
@@ -10,7 +10,8 @@
  *
  * 酷我走 CharlesPikachu/musicdl：
  *   官方：GET https://mobi.kuwo.cn/mobi.s?f=kuwo&q=DES(ylzsxkwm, convert_url2)
- *   回退：haitang / nxinxz（320k 与 flac）
+ *         format=flac | format=mp3&br=320kmp3 | format=mp3
+ *   回退：haitang / nxinxz
  *   歌词：GET https://www.kuwo.cn/openapi/v1/www/lyric/getlyric
  *   不请求加密 mgg/mflac（沙箱没有 zlib/QMC）
  *
@@ -379,7 +380,7 @@ function kwGuessType(url) {
   ) {
     return 'flac'
   }
-  if (lower.indexOf('m800') >= 0 || lower.indexOf('320k') >= 0) return '320k'
+  if (lower.indexOf('m800') >= 0 || lower.indexOf('320k') >= 0 || lower.indexOf('bitrate$320') >= 0) return '320k'
   return '128k'
 }
 
@@ -420,17 +421,24 @@ function kwLrclistToLrc(list) {
   return lines.join('\n')
 }
 
-async function kwOfficialUrl(id, format) {
-  const query =
+async function kwOfficialUrl(id, format, br) {
+  let query =
     'user=0&corp=kuwo&source=kwplayer_ar_5.1.0.0_B_jiakong_vh.apk&p2p=1&type=convert_url2&sig=0&format=' +
     format +
     '&rid=' +
     id
+  if (br) query += '&br=' + br
   const text = await requestText(KW_MOBI_URL + '?f=kuwo&q=' + encodeURIComponent(kwEncryptQuery(query)), {
     method: 'GET',
     headers: { 'User-Agent': 'okhttp/3.10.0' },
   })
-  return kwUrlResult(kwPickMobiUrl(text || ''))
+  const result = kwUrlResult(kwPickMobiUrl(text || ''))
+  if (!result) return null
+  const bitrate = Number((/(?:^|\r?\n)bitrate=([^\r\n]+)/.exec(text || '') || [])[1])
+  if (bitrate === 320) result.type = '320k'
+  else if (bitrate === 128) result.type = '128k'
+  if (br === '320kmp3' && result.type !== '320k') return null
+  return result
 }
 
 async function kwThirdPartyUrl(id, level) {
@@ -485,7 +493,11 @@ async function handleKw(action, info) {
 
   const quality = info && info.type
   if (quality === '320k') {
-    return (await kwThirdPartyUrl(id, 'exhigh')) || (await kwAntiUrl(id)) || (await kwOfficialUrl(id, 'mp3'))
+    return (
+      (await kwOfficialUrl(id, 'mp3', '320kmp3')) ||
+      (await kwThirdPartyUrl(id, 'exhigh')) ||
+      (await kwAntiUrl(id))
+    )
   }
   if (quality === 'flac' || quality === 'flac24bit' || quality === 'hires') {
     return (await kwOfficialUrl(id, 'flac')) || (await kwThirdPartyUrl(id, 'lossless'))
