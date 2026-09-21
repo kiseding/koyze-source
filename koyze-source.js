@@ -1,12 +1,14 @@
 /*!
  * @name 巡回寺 QQ + 网易云
  * @description 巡回寺 API 解析 QQ Music 的 128k、320k；Netease_url 解析网易云 128k / 320k / flac / hires 与歌词
- * @version 1.1.0
+ * @version 1.1.1
  * @author kiseding
  *
  * 网易云走 Suxiaoqinx/Netease_url：
  *   线上：POST https://nextmusic.toubiec.cn/api/getSongUrl|getSongLyric
  *   原版：POST {WY_API_BASE}/song  （自建 python main.py 时把 WY_API_BASE 改成你的地址）
+ *
+ * body 传对象而不是 JSON.stringify，让 Koyze 引擎按 JSON 编码并写成字节。
  */
 
 const TX_API_URL = 'https://api.xunhuisi.store/API/QQMusic/Song.php'
@@ -72,7 +74,7 @@ async function wyEnsureSession() {
   const data = await requestJson(WY_API_BASE + '/api/ip', {
     method: 'POST',
     headers: wyHeaders(),
-    body: JSON.stringify({ timestamp: Date.now() }),
+    body: { timestamp: Date.now() },
   })
   const ip = data && data.data && data.data.ip
   wySession = { ip: ip ? String(ip) : '', at: Date.now() }
@@ -93,7 +95,7 @@ async function wyPost(path, extra, useSession) {
   return requestJson(WY_API_BASE + path, {
     method: 'POST',
     headers: wyHeaders(),
-    body: JSON.stringify(payload),
+    body: payload,
   })
 }
 
