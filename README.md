@@ -4,7 +4,7 @@ lx-music-source
 在线导入 - 加速链接
 
 xunhuisi
-https://ghproxy.net/raw.githubusercontent.com/kiseding/xunhuisiapi/refs/heads/main/%E5%B7%A1%E5%9B%9E%E5%AF%BA-%E4%BB%85tx-128k-320k.js
+https://ghproxy.net/raw.githubusercontent.com/kiseding/koyze-source/refs/heads/main/%E5%B7%A1%E5%9B%9E%E5%AF%BA-%E4%BB%85tx-128k-320k.js
 
 Huibq
 https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/huibq/latest.js
@@ -40,3 +40,9 @@ https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/qdy/lat
 
 部分数据来源
 @pdone
+@Suxiaoqinx/Netease_url
+
+巡回寺脚本当前能力：
+- QQ（tx）：巡回寺 API，128k / 320k，含歌词
+- 网易云（wy）：Netease_url 公开实例 `nextmusic.toubiec.cn`，128k / 320k / flac / hires，含歌词
+  自建时把脚本里的 `WY_API_BASE` 改成你的服务地址，会回退到原版 `/song`
