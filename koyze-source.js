@@ -1,12 +1,20 @@
 /*!
- * @name 巡回寺 QQ + 网易云 + 酷我
- * @description 巡回寺解析 QQ；Netease_url 解析网易云；musicdl 酷我官方 convert_url2（DES）解析可播 flac/320k/128k，歌词走酷我 openapi
- * @version 1.2.1
+ * @name 巡回寺 QQ + 网易云 + 酷我 + 酷狗
+ * @description 巡回寺解析 QQ；Netease_url 解析网易云；musicdl 酷我官方 convert_url2（DES）；musicdl 酷狗 tracker v2（md5 签名），三档 hash 由 Koyze 透传
+ * @version 1.3.0
  * @author kiseding
  *
  * 网易云走 Suxiaoqinx/Netease_url：
  *   线上：POST https://nextmusic.toubiec.cn/api/getSongUrl|getSongLyric
  *   原版：POST {WY_API_BASE}/song  （自建 python main.py 时把 WY_API_BASE 改成你的地址）
+ *
+ * 酷狗走 CharlesPikachu/musicdl：
+ *   官方：GET https://trackercdn.kugou.com/i/v2/?
+ *         appid=1005&pid=2&cmd=25&behavior=play&hash={hash}&key=MD5(hash+kgcloudv2)
+ *         128k / 320k / 无损各有一个 hash，由 Koyze 写入 musicInfo
+ *         （hash / kgHash320 / kgHashFlac），脚本按请求档位选 hash。
+ *   回退：trackercdnbj（cmd=23）、haitangw
+ *   歌词：krcs.kugou.com/search + lyrics.kugou.com/download（base64 LRC）
  *
  * 酷我走 CharlesPikachu/musicdl：
  *   官方：GET https://mobi.kuwo.cn/mobi.s?f=kuwo&q=DES(ylzsxkwm, convert_url2)
@@ -24,6 +32,36 @@ const WY_PAGE_ORIGIN = 'https://wyapi.toubiec.cn'
 const KW_MOBI_URL = 'https://mobi.kuwo.cn/mobi.s'
 const KW_LYRIC_URL = 'https://www.kuwo.cn/openapi/v1/www/lyric/getlyric'
 const KW_PIC_URL = 'https://artistpicserver.kuwo.cn/pic.web'
+const KG_UA =
+  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+const KG_TRACKER_URL = 'https://trackercdn.kugou.com/i/v2/'
+const KG_TRACKER_BACKUP_URL = 'https://trackercdnbj.kugou.com/i/v2/'
+const KG_LYRIC_SEARCH_URL = 'https://krcs.kugou.com/search'
+const KG_LYRIC_DOWNLOAD_URL = 'https://lyrics.kugou.com/download'
+const KG_HAITANG_URL = 'https://musicapi.haitangw.net/kgqq/kg.php'
+const KG_HAITANG_ALT_URL = 'https://music.haitangw.cc/kgqq/kg.php'
+const KG_LYRIC_HEADERS = {
+  'KG-RC': '1',
+  'KG-THash': 'expand_search_manager.cpp:852736169:451',
+  'User-Agent': 'KuGou2012-9020-ExpandSearchManager',
+  Referer: 'https://www.kugou.com/',
+}
+// 请求档位 -> 依次尝试的 hash 档位
+const KG_LEVELS = {
+  '128k': ['128'],
+  '320k': ['320', '128'],
+  flac: ['flac', '320', '128'],
+  flac24bit: ['flac', '320', '128'],
+  hires: ['flac', '320', '128'],
+}
+// tracker 拿不到时的第三方档位（musicdl 的 haitangw 路线）
+const KG_THIRD_LEVELS = {
+  '128k': ['standard'],
+  '320k': ['exhigh'],
+  flac: ['lossless', 'hires'],
+  flac24bit: ['hires', 'lossless'],
+  hires: ['hires', 'lossless'],
+}
 const KW_ANTI_URL = 'https://antiserver.kuwo.cn/anti.s'
 const KW_HAITANG_URL = 'https://musicapi.haitangw.net/music/kw.php'
 const KW_NXINXZ_URL = 'https://music.nxinxz.com/kw.php'
@@ -508,10 +546,197 @@ async function handleKw(action, info) {
   return null
 }
 
+function kgMd5(text) {
+  const utils = lx && lx.utils && lx.utils.crypto
+  if (!utils || typeof utils.md5 !== 'function') return ''
+  const value = utils.md5(String(text))
+  return typeof value === 'string' ? value : ''
+}
+
+function kgRead(musicInfo, meta, keys) {
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]
+    const direct = musicInfo && musicInfo[key]
+    if (direct != null && String(direct).trim()) return String(direct).trim()
+    const nested = meta && meta[key]
+    if (nested != null && String(nested).trim()) return String(nested).trim()
+  }
+  return ''
+}
+
+function kgPickHash(musicInfo, level) {
+  const meta =
+    musicInfo && musicInfo.meta && typeof musicInfo.meta === 'object' ? musicInfo.meta : {}
+  const h128 = kgRead(musicInfo, meta, ['hash', 'kgHash128', 'FileHash', 'songmid', 'id'])
+  const h320 = kgRead(musicInfo, meta, ['kgHash320', 'HQFileHash', '320hash', 'hash_high'])
+  const hflac = kgRead(musicInfo, meta, ['kgHashFlac', 'SQFileHash', 'sqhash'])
+  if (level === 'flac') return hflac || h320 || h128
+  if (level === '320') return h320 || h128
+  return h128
+}
+
+// tracker 的 bitRate 是 bps，第三方接口有时给 kbps，先归一再判断。
+function kgTypeFromBitrate(bitRate, extName) {
+  const ext = String(extName || '').toLowerCase()
+  if (ext === 'flac' || ext === 'ape' || ext === 'wav') return 'flac'
+  const value = Number(bitRate) || 0
+  const kbps = value > 10000 ? Math.round(value / 1000) : value
+  if (kbps >= 300) return '320k'
+  if (kbps >= 160) return '192k'
+  return '128k'
+}
+
+function kgPickTrackerUrl(payload) {
+  const raw = payload && payload.url
+  const first = Array.isArray(raw) ? (raw.length ? raw[0] : '') : raw
+  return pickHttpUrl(first)
+}
+
+async function kgRequestTracker(base, hash) {
+  const key = kgMd5(hash + 'kgcloudv2')
+  if (!key) return null
+  const isBackup = base.indexOf('trackercdnbj') >= 0
+  const query = isBackup
+    ? 'cmd=23&pid=1&behavior=play'
+    : 'appid=1005&pid=2&cmd=25&behavior=play'
+  const data = await requestJson(
+    base + '?' + query + '&hash=' + encodeURIComponent(hash) + '&key=' + key,
+    {
+      method: 'GET',
+      headers: { 'User-Agent': KG_UA, Referer: 'https://www.kugou.com/' },
+    },
+  )
+  if (!data || Number(data.status) !== 1) return null
+  const url = kgPickTrackerUrl(data)
+  if (!url) return null
+  return { url: url, type: kgTypeFromBitrate(data.bitRate, data.extName) }
+}
+
+async function kgTrackerUrl(hash) {
+  return (
+    (await kgRequestTracker(KG_TRACKER_URL, hash)) ||
+    (await kgRequestTracker(KG_TRACKER_BACKUP_URL, hash))
+  )
+}
+
+function kgPickThirdUrl(payload) {
+  if (!payload || typeof payload !== 'object') return ''
+  return pickHttpUrl(payload.url) || pickHttpUrl(payload.music_url) || pickWyUrl(payload)
+}
+
+async function kgThirdPartyUrl(hash, levels) {
+  const bases = [KG_HAITANG_URL, KG_HAITANG_ALT_URL]
+  for (let i = 0; i < levels.length; i++) {
+    for (let b = 0; b < bases.length; b++) {
+      const data = await requestJson(
+        bases[b] + '?type=json&id=' + encodeURIComponent(hash) + '&level=' + levels[i],
+        { method: 'GET', headers: { 'User-Agent': KG_UA } },
+      )
+      const url = kgPickThirdUrl(data)
+      if (url) return { url: url, type: kwGuessType(url) }
+    }
+  }
+  return null
+}
+
+function kgDurationMs(musicInfo) {
+  const raw = musicInfo && musicInfo.interval
+  if (typeof raw === 'number' && raw > 0) {
+    return Math.round(raw > 1000 ? raw : raw * 1000)
+  }
+  if (typeof raw !== 'string') return 0
+  const parts = raw.split(':')
+  if (parts.length === 2) return (Number(parts[0]) * 60 + Number(parts[1])) * 1000
+  if (parts.length === 3) {
+    return (Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2])) * 1000
+  }
+  return 0
+}
+
+function kgBase64Text(value) {
+  try {
+    const binary = atob(String(value || ''))
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i) & 0xFF
+    if (typeof TextDecoder === 'function') return new TextDecoder('utf-8').decode(bytes)
+    let out = ''
+    for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i])
+    return out
+  } catch (_) {
+    return ''
+  }
+}
+
+async function kgLyric(hash, musicInfo) {
+  const keyword = [musicInfo && musicInfo.name, musicInfo && musicInfo.singer]
+    .filter(Boolean)
+    .join(' ')
+  const query = [
+    'ver=1',
+    'man=yes',
+    'client=mobi',
+    'keyword=' + encodeURIComponent(keyword || ''),
+    'duration=' + (kgDurationMs(musicInfo) || -1),
+    'hash=' + encodeURIComponent(hash),
+  ]
+  const search = await requestJson(KG_LYRIC_SEARCH_URL + '?' + query.join('&'), {
+    method: 'GET',
+    headers: KG_LYRIC_HEADERS,
+  })
+  const candidates = search && search.candidates
+  if (!Array.isArray(candidates) || !candidates.length) return null
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i]
+    if (!candidate || !candidate.id || !candidate.accesskey) continue
+    const download = await requestJson(
+      KG_LYRIC_DOWNLOAD_URL +
+        '?ver=1&client=pc&fmt=lrc&charset=utf8&id=' +
+        encodeURIComponent(candidate.id) +
+        '&accesskey=' +
+        encodeURIComponent(candidate.accesskey),
+      { method: 'GET', headers: KG_LYRIC_HEADERS },
+    )
+    const lyric = kgBase64Text(download && download.content)
+    if (lyric.trim()) return { lyric: lyric }
+  }
+  return null
+}
+
+async function handleKg(action, info) {
+  const musicInfo = (info && info.musicInfo) || {}
+  const quality = (info && info.type) || '128k'
+
+  if (action === 'pic') {
+    const url = pickHttpUrl(musicInfo.img)
+    return url ? { url: url } : null
+  }
+
+  const h128 = kgPickHash(musicInfo, '128')
+  if (!h128) return null
+
+  if (action === 'lyric') return kgLyric(h128, musicInfo)
+  if (action !== 'musicUrl') return null
+
+  const levels = KG_LEVELS[quality]
+  if (!levels) return null
+
+  const tried = []
+  for (let i = 0; i < levels.length; i++) {
+    const hash = kgPickHash(musicInfo, levels[i])
+    if (!hash || tried.indexOf(hash) >= 0) continue
+    tried.push(hash)
+    const result = await kgTrackerUrl(hash)
+    if (result) return result
+  }
+  return kgThirdPartyUrl(h128, KG_THIRD_LEVELS[quality] || [])
+}
+
 lx.on(lx.EVENT_NAMES.request, ({ action, source, info }) => {
   if (source === 'tx') return handleTx(action, info)
   if (source === 'wy') return handleWy(action, info)
   if (source === 'kw') return handleKw(action, info)
+  if (source === 'kg') return handleKg(action, info)
   return null
 })
 
@@ -529,6 +754,11 @@ lx.send(lx.EVENT_NAMES.inited, {
       qualitys: ['128k', '320k', 'flac', 'flac24bit', 'hires'],
     },
     kw: {
+      type: 'music',
+      actions: ['musicUrl', 'lyric', 'pic'],
+      qualitys: ['128k', '320k', 'flac', 'flac24bit', 'hires'],
+    },
+    kg: {
       type: 'music',
       actions: ['musicUrl', 'lyric', 'pic'],
       qualitys: ['128k', '320k', 'flac', 'flac24bit', 'hires'],
