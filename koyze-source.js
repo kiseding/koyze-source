@@ -1,45 +1,58 @@
 /*!
  * @name 巡回寺 QQ + 网易云 + 酷我 + 酷狗
- * @description 巡回寺解析 QQ；Netease_url 解析网易云；musicdl 酷我官方 convert_url2（DES）；musicdl 酷狗 tracker v2（md5 签名），三档 hash 由 Koyze 透传
- * @version 1.3.0
+ * @description 网易云 / 酷狗全部改走官方接口（320k 直出，不依赖任何第三方转发站）；QQ 走巡回寺；酷我走官方 convert_url2（DES）
+ * @version 2.0.0
  * @author kiseding
  *
- * 网易云走 Suxiaoqinx/Netease_url：
- *   线上：POST https://nextmusic.toubiec.cn/api/getSongUrl|getSongLyric
- *   原版：POST {WY_API_BASE}/song  （自建 python main.py 时把 WY_API_BASE 改成你的地址）
+ * ===== 网易云：官方 music.163.com，不需要第三方站 =====
+ *   取地址：GET https://music.163.com/api/song/enhance/player/url
+ *                ?ids=[id]&br=320000
+ *           免 cookie 下大部分歌曲直接给 320k（fee=8 的也放 320k）；
+ *           返回 code=-110 是仅会员可听，code=404 是已下架/无版权。
+ *           回退：GET /api/song/enhance/player/url/v1?ids=[id]&level=exhigh&encodeType=mp3
+ *   歌词：  GET https://music.163.com/api/song/lyric?id={id}&lv=-1&kv=-1&tv=-1
+ *   封面：  GET https://music.163.com/api/song/detail?ids=[id]
+ *   → 想听会员曲目，把 CONFIG.wyCookie 填成自己的 MUSIC_U 即可。
  *
- * 酷狗走 CharlesPikachu/musicdl：
- *   官方：GET https://trackercdn.kugou.com/i/v2/?
- *         appid=1005&pid=2&cmd=25&behavior=play&hash={hash}&key=MD5(hash+kgcloudv2)
- *         128k / 320k / 无损各有一个 hash，由 Koyze 写入 musicInfo
- *         （hash / kgHash320 / kgHashFlac），脚本按请求档位选 hash。
- *   回退：trackercdnbj（cmd=23）、haitangw
- *   歌词：krcs.kugou.com/search + lyrics.kugou.com/download（base64 LRC）
+ * ===== 酷狗：官方 m.kugou.com + trackercdn，不需要第三方站 =====
+ *   补 hash：GET https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash={128hash}
+ *            即使上层只给 128k 的 hash，也能从 extra.320hash / extra.sqhash
+ *            补出 320k 与无损档位；顺带拿封面 album_img 与时长。
+ *   取地址： GET https://trackercdn.kugou.com/i/v2/
+ *             ?appid=1005&pid=2&cmd=25&behavior=play&hash={hash}&key=MD5(hash+"kgcloudv2")
+ *            status=1 → 成功，bitRate 决定真实档位，无损的 url 是数组；
+ *            status=2 → 该曲需要付费 / 会员。
+ *   回退：  trackercdnbj.kugou.com（cmd=23&pid=1）
+ *   歌词：  krcs.kugou.com/search + lyrics.kugou.com/download（base64 LRC）
  *
- * 酷我走 CharlesPikachu/musicdl：
- *   官方：GET https://mobi.kuwo.cn/mobi.s?f=kuwo&q=DES(ylzsxkwm, convert_url2)
- *         format=flac | format=mp3&br=320kmp3 | format=mp3
- *   回退：haitang / nxinxz
- *   歌词：GET https://www.kuwo.cn/openapi/v1/www/lyric/getlyric
+ * ===== 酷我：官方 mobi.kuwo.cn convert_url2（DES），保持原样 =====
+ *   format=flac | format=mp3&br=320kmp3 | format=mp3
  *   不请求加密 mgg/mflac（沙箱没有 zlib/QMC）
  *
  * body 传对象而不是 JSON.stringify，让 Koyze 引擎按 JSON 编码并写成字节。
  */
 
+// 需要会员曲目时填自己的登录态；留空则只走免登录能拿到的档位
+const CONFIG = {
+  // 浏览器登录 music.163.com → F12 → Application → Cookies → 复制 MUSIC_U 的值
+  // 可写 'MUSIC_U=xxxx' 也可只写 'xxxx'
+  wyCookie: '',
+  // 酷狗网页登录后的 token / userid，留空即匿名（匿名可播非会员曲目）
+  kgToken: '',
+  kgUserId: '',
+}
+
 const TX_API_URL = 'https://api.xunhuisi.store/API/QQMusic/Song.php'
-const WY_API_BASE = 'https://nextmusic.toubiec.cn'
-const WY_PAGE_ORIGIN = 'https://wyapi.toubiec.cn'
 const KW_MOBI_URL = 'https://mobi.kuwo.cn/mobi.s'
 const KW_LYRIC_URL = 'https://www.kuwo.cn/openapi/v1/www/lyric/getlyric'
 const KW_PIC_URL = 'https://artistpicserver.kuwo.cn/pic.web'
 const KG_UA =
   'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+const KG_PLAYINFO_URL = 'https://m.kugou.com/app/i/getSongInfo.php'
 const KG_TRACKER_URL = 'https://trackercdn.kugou.com/i/v2/'
 const KG_TRACKER_BACKUP_URL = 'https://trackercdnbj.kugou.com/i/v2/'
 const KG_LYRIC_SEARCH_URL = 'https://krcs.kugou.com/search'
 const KG_LYRIC_DOWNLOAD_URL = 'https://lyrics.kugou.com/download'
-const KG_HAITANG_URL = 'https://musicapi.haitangw.net/kgqq/kg.php'
-const KG_HAITANG_ALT_URL = 'https://music.haitangw.cc/kgqq/kg.php'
 const KG_LYRIC_HEADERS = {
   'KG-RC': '1',
   'KG-THash': 'expand_search_manager.cpp:852736169:451',
@@ -54,14 +67,6 @@ const KG_LEVELS = {
   flac24bit: ['flac', '320', '128'],
   hires: ['flac', '320', '128'],
 }
-// tracker 拿不到时的第三方档位（musicdl 的 haitangw 路线）
-const KG_THIRD_LEVELS = {
-  '128k': ['standard'],
-  '320k': ['exhigh'],
-  flac: ['lossless', 'hires'],
-  flac24bit: ['hires', 'lossless'],
-  hires: ['hires', 'lossless'],
-}
 const KW_ANTI_URL = 'https://antiserver.kuwo.cn/anti.s'
 const KW_HAITANG_URL = 'https://musicapi.haitangw.net/music/kw.php'
 const KW_NXINXZ_URL = 'https://music.nxinxz.com/kw.php'
@@ -69,18 +74,51 @@ const TX_QUALITY_MAP = {
   '128k': 'standard',
   '320k': 'high',
 }
-const WY_QUALITY_MAP = {
+
+// ===== 网易云（官方接口）=====
+const WY_API = 'https://music.163.com'
+const WY_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+// 请求档位 -> 依次尝试的码率（接口会按账号权限自动降级）
+const WY_BR_CHAIN = {
+  '128k': [128000],
+  '320k': [320000, 128000],
+  flac: [999000, 320000, 128000],
+  flac24bit: [1900000, 999000, 320000],
+  hires: [1900000, 999000, 320000],
+}
+const WY_LEVEL_BY_TYPE = {
   '128k': 'standard',
   '320k': 'exhigh',
   flac: 'lossless',
   flac24bit: 'hires',
   hires: 'hires',
 }
-const WY_LEVEL_TO_TYPE = {
-  standard: '128k',
-  exhigh: '320k',
-  lossless: 'flac',
-  hires: 'hires',
+
+// lx.request 的 body 可能是 string，也可能是 ArrayBuffer / TypedArray，统一按 UTF-8 解出来
+function responseText(body) {
+  if (typeof body === 'string') return body
+  if (body == null) return ''
+  try {
+    let view = null
+    if (typeof ArrayBuffer !== 'undefined' && body instanceof ArrayBuffer) {
+      view = new Uint8Array(body)
+    } else if (
+      typeof ArrayBuffer !== 'undefined' &&
+      body &&
+      typeof body === 'object' &&
+      body.buffer instanceof ArrayBuffer
+    ) {
+      view = new Uint8Array(body.buffer, body.byteOffset || 0, body.byteLength || 0)
+    }
+    if (view) {
+      if (typeof TextDecoder === 'function') return new TextDecoder('utf-8').decode(view)
+      let out = ''
+      for (let i = 0; i < view.length; i++) out += String.fromCharCode(view[i])
+      return out
+    }
+  } catch (_) {}
+  return ''
 }
 
 function requestJson(url, options) {
@@ -92,9 +130,19 @@ function requestJson(url, options) {
         return
       }
 
+      const body = response.body
+      const text = responseText(body)
+      if (!text) {
+        // 少数实现会直接给已解析好的对象
+        const isBinary =
+          typeof ArrayBuffer !== 'undefined' &&
+          (body instanceof ArrayBuffer || (body && typeof body === 'object' && body.buffer instanceof ArrayBuffer))
+        resolve(!isBinary && body && typeof body === 'object' ? body : null)
+        return
+      }
+
       try {
-        const body = response.body
-        resolve(typeof body === 'string' ? JSON.parse(body) : body)
+        resolve(JSON.parse(text))
       } catch (_) {
         resolve(null)
       }
@@ -110,66 +158,50 @@ function requestText(url, options) {
         resolve(null)
         return
       }
-      const body = response.body
-      if (typeof body === 'string') {
-        resolve(body)
-        return
-      }
-      if (body == null) {
-        resolve('')
-        return
-      }
-      resolve(String(body))
+      resolve(responseText(response.body))
     })
   })
 }
 
+function wyCookieValue() {
+  const raw = String(CONFIG.wyCookie || '').trim()
+  if (!raw) return ''
+  if (raw.indexOf('MUSIC_U=') >= 0) return raw
+  return 'MUSIC_U=' + raw
+}
+
 function wyHeaders() {
-  return {
-    'Content-Type': 'application/json',
-    Origin: WY_PAGE_ORIGIN,
-    Referer: WY_PAGE_ORIGIN + '/',
+  const headers = {
+    'User-Agent': WY_UA,
+    Referer: WY_API + '/',
   }
+  const cookie = wyCookieValue()
+  if (cookie) headers.Cookie = cookie + '; os=pc; appver=2.9.7'
+  return headers
 }
 
-function wyOk(data) {
-  if (!data || typeof data !== 'object') return false
-  if (data.success === true) return true
-  const code = data.code == null ? data.status : data.code
-  return Number(code) === 200
-}
-
-let wySession = null
-
-async function wyEnsureSession() {
-  if (wySession && Date.now() - wySession.at < 10 * 60 * 1000) return wySession
-
-  const data = await requestJson(WY_API_BASE + '/api/ip', {
-    method: 'POST',
+function wyGet(path, query) {
+  return requestJson(WY_API + path + (query ? '?' + query : ''), {
+    method: 'GET',
     headers: wyHeaders(),
-    body: { timestamp: Date.now() },
   })
-  const ip = data && data.data && data.data.ip
-  wySession = { ip: ip ? String(ip) : '', at: Date.now() }
-  return wySession
 }
 
-async function wyPost(path, extra, useSession) {
-  const payload = {}
-  const keys = Object.keys(extra || {})
-  for (let i = 0; i < keys.length; i++) payload[keys[i]] = extra[keys[i]]
+// 接口返回的 br 是实际给出的码率，按它反推真实档位
+function wyTypeFromBr(br) {
+  const value = Number(br) || 0
+  if (value >= 1800000) return 'hires'
+  if (value >= 900000) return 'flac'
+  if (value >= 300000) return '320k'
+  return '128k'
+}
 
-  if (useSession) {
-    const session = await wyEnsureSession()
-    payload.timestamp = Date.now()
-    if (session && session.ip) payload.ip = session.ip
-  }
-
-  return requestJson(WY_API_BASE + path, {
-    method: 'POST',
-    headers: wyHeaders(),
-    body: payload,
-  })
+function wyPickItem(data) {
+  if (!data || typeof data !== 'object') return null
+  const payload = data.data
+  if (Array.isArray(payload)) return payload[0] || null
+  if (payload && typeof payload === 'object') return payload
+  return data
 }
 
 function pickHttpUrl(value) {
@@ -194,26 +226,11 @@ function pickLyricText(value) {
   return ''
 }
 
-function wyUrlResult(data) {
-  const url = pickWyUrl(data)
+function wyUrlResult(item) {
+  if (!item) return null
+  const url = pickHttpUrl(item.url) || pickHttpUrl(item.music_url)
   if (!url) return null
-  const payload = data && data.data && !Array.isArray(data.data) ? data.data : data
-  const result = { url: url }
-  const type = WY_LEVEL_TO_TYPE[payload && payload.level]
-  if (type) result.type = type
-  return result
-}
-
-function wyLyricResult(data) {
-  const payload = data && data.data ? data.data : data
-  const lyric =
-    pickLyricText(payload && payload.lrc) ||
-    pickLyricText(payload && payload.lyric)
-  if (!lyric) return null
-  const tlyric = pickLyricText(payload && payload.tlyric)
-  const result = { lyric: lyric }
-  if (tlyric) result.tlyric = tlyric
-  return result
+  return { url: url, type: wyTypeFromBr(item.br) }
 }
 
 function handleTx(action, info) {
@@ -243,34 +260,53 @@ async function handleWy(action, info) {
   const musicInfo = (info && info.musicInfo) || {}
   const id = musicInfo.songmid || musicInfo.id || musicInfo.hash
   if (!id) return null
-  if (action !== 'musicUrl' && action !== 'lyric') return null
+  if (action !== 'musicUrl' && action !== 'lyric' && action !== 'pic') return null
 
-  if (action === 'lyric') {
-    let data = await wyPost('/api/getSongLyric', { id: String(id) }, true)
-    let result = wyOk(data) ? wyLyricResult(data) : null
-    if (result) return result
+  const songId = encodeURIComponent(String(id))
 
-    data = await wyPost(
-      '/song',
-      { id: String(id), ids: String(id), type: 'lyric' },
-      false,
-    )
-    return wyOk(data) ? wyLyricResult(data) : null
+  if (action === 'pic') {
+    const data = await wyGet('/api/song/detail', 'ids=%5B' + songId + '%5D')
+    const songs = (data && data.songs) || []
+    const album = songs[0] && songs[0].album
+    const url = pickHttpUrl(album && album.picUrl)
+    return url ? { url: url } : null
   }
 
-  const level = WY_QUALITY_MAP[info && info.type]
+  if (action === 'lyric') {
+    const data = await wyGet('/api/song/lyric', 'id=' + songId + '&lv=-1&kv=-1&tv=-1')
+    if (!data) return null
+    const lyric = pickLyricText(data.lrc) || pickLyricText(data.lyric)
+    if (!lyric) return null
+    const result = { lyric: lyric }
+    const tlyric = pickLyricText(data.tlyric)
+    if (tlyric) result.tlyric = tlyric
+    return result
+  }
+
+  const chain = WY_BR_CHAIN[info && info.type]
+  if (!chain) return null
+
+  // 官方接口会按账号权限自动降级，所以按码率从高到低试
+  for (let i = 0; i < chain.length; i++) {
+    const data = await wyGet(
+      '/api/song/enhance/player/url',
+      'ids=%5B' + songId + '%5D&br=' + chain[i],
+    )
+    const item = wyPickItem(data)
+    const result = wyUrlResult(item)
+    if (result) return result
+    // -110 仅会员 / 404 已下架：换码率也没用，直接跳出
+    if (item && Number(item.code) !== 200) break
+  }
+
+  // 回退 v1 level 端点
+  const level = WY_LEVEL_BY_TYPE[info && info.type]
   if (!level) return null
-
-  let data = await wyPost('/api/getSongUrl', { id: String(id), level: level }, true)
-  let result = wyOk(data) ? wyUrlResult(data) : null
-  if (result) return result
-
-  data = await wyPost(
-    '/song',
-    { id: String(id), ids: String(id), level: level, type: 'url' },
-    false,
+  const data = await wyGet(
+    '/api/song/enhance/player/url/v1',
+    'ids=%5B' + songId + '%5D&level=' + level + '&encodeType=mp3',
   )
-  return wyOk(data) ? wyUrlResult(data) : null
+  return wyUrlResult(wyPickItem(data))
 }
 
 const KW_LS = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
@@ -564,15 +600,74 @@ function kgRead(musicInfo, meta, keys) {
   return ''
 }
 
-function kgPickHash(musicInfo, level) {
-  const meta =
-    musicInfo && musicInfo.meta && typeof musicInfo.meta === 'object' ? musicInfo.meta : {}
-  const h128 = kgRead(musicInfo, meta, ['hash', 'kgHash128', 'FileHash', 'songmid', 'id'])
-  const h320 = kgRead(musicInfo, meta, ['kgHash320', 'HQFileHash', '320hash', 'hash_high'])
-  const hflac = kgRead(musicInfo, meta, ['kgHashFlac', 'SQFileHash', 'sqhash'])
-  if (level === 'flac') return hflac || h320 || h128
-  if (level === '320') return h320 || h128
-  return h128
+// playInfo 结果缓存：同一个 128 hash 30 分钟内不重复请求
+const kgInfoCache = {}
+
+function kgCacheGet(hash) {
+  const item = kgInfoCache[hash]
+  if (item && Date.now() - item.at < 30 * 60 * 1000) return item
+  return null
+}
+
+// 官方 getSongInfo 会把 320 / 无损的 hash 一并给我们（extra 里），
+// 所以即便上层只给了 128k 的 hash，也能补出高档位。
+async function kgPlayInfo(h128) {
+  if (!h128) return null
+  const cached = kgCacheGet(h128)
+  if (cached) return cached
+
+  const data = await requestJson(
+    KG_PLAYINFO_URL + '?cmd=playInfo&hash=' + encodeURIComponent(h128),
+    {
+      method: 'GET',
+      headers: { 'User-Agent': KG_UA, Referer: 'https://m.kugou.com/' },
+    },
+  )
+  if (!data || typeof data !== 'object') return null
+
+  const extra = data.extra && typeof data.extra === 'object' ? data.extra : {}
+  const albumPic = pickHttpUrl(data.album_img) || pickHttpUrl(data.imgUrl)
+  const record = {
+    at: Date.now(),
+    h128: h128,
+    h320: String(extra['320hash'] || '').trim(),
+    hsq: String(extra['sqhash'] || '').trim(),
+    direct: pickHttpUrl(data.url),
+    pic: albumPic ? albumPic.replace(/\{size\}/g, '480') : '',
+    name: String(data.fileName || data.songName || '').trim(),
+    singer: String(data.author_name || data.singerName || '').trim(),
+    duration: (Number(data.timeLength) || 0) * 1000,
+    blocked: String(data.error || '').trim(),
+  }
+
+  const keys = Object.keys(kgInfoCache)
+  if (keys.length > 200) {
+    for (let i = 0; i < keys.length; i++) {
+      if (Date.now() - kgInfoCache[keys[i]].at > 30 * 60 * 1000) delete kgInfoCache[keys[i]]
+    }
+  }
+
+  kgInfoCache[h128] = record
+  return record
+}
+
+// 某一档位该用哪个 hash；取不到就给空串，让调用方跳过这一档
+function kgHashFor(musicInfo, meta, level, playInfo) {
+  if (level === 'flac') {
+    return (
+      kgRead(musicInfo, meta, ['kgHashFlac', 'SQFileHash', 'sqhash']) ||
+      (playInfo && playInfo.hsq) ||
+      ''
+    )
+  }
+  if (level === '320') {
+    return (
+      kgRead(musicInfo, meta, ['kgHash320', 'HQFileHash', '320hash', 'hash_high']) ||
+      (playInfo && playInfo.h320) ||
+      ''
+    )
+  }
+  return kgRead(musicInfo, meta, ['hash', 'kgHash128', 'FileHash', 'songmid', 'id'])
 }
 
 // tracker 的 bitRate 是 bps，第三方接口有时给 kbps，先归一再判断。
@@ -596,9 +691,14 @@ async function kgRequestTracker(base, hash) {
   const key = kgMd5(hash + 'kgcloudv2')
   if (!key) return null
   const isBackup = base.indexOf('trackercdnbj') >= 0
-  const query = isBackup
-    ? 'cmd=23&pid=1&behavior=play'
-    : 'appid=1005&pid=2&cmd=25&behavior=play'
+  let query = isBackup ? 'cmd=23&pid=1&behavior=play' : 'appid=1005&pid=2&cmd=25&behavior=play'
+
+  // 填了会员登录态就带上；匿名只能拿到非会员曲目
+  const token = String(CONFIG.kgToken || '').trim()
+  const userId = String(CONFIG.kgUserId || '').trim()
+  if (token) query += '&token=' + encodeURIComponent(token)
+  if (userId) query += '&userid=' + encodeURIComponent(userId)
+
   const data = await requestJson(
     base + '?' + query + '&hash=' + encodeURIComponent(hash) + '&key=' + key,
     {
@@ -619,24 +719,10 @@ async function kgTrackerUrl(hash) {
   )
 }
 
-function kgPickThirdUrl(payload) {
-  if (!payload || typeof payload !== 'object') return ''
-  return pickHttpUrl(payload.url) || pickHttpUrl(payload.music_url) || pickWyUrl(payload)
-}
-
-async function kgThirdPartyUrl(hash, levels) {
-  const bases = [KG_HAITANG_URL, KG_HAITANG_ALT_URL]
-  for (let i = 0; i < levels.length; i++) {
-    for (let b = 0; b < bases.length; b++) {
-      const data = await requestJson(
-        bases[b] + '?type=json&id=' + encodeURIComponent(hash) + '&level=' + levels[i],
-        { method: 'GET', headers: { 'User-Agent': KG_UA } },
-      )
-      const url = kgPickThirdUrl(data)
-      if (url) return { url: url, type: kwGuessType(url) }
-    }
-  }
-  return null
+// playInfo 偶尔直接给 url（免费曲目），作为最后兜底
+function kgDirectUrl(playInfo) {
+  if (!playInfo || !playInfo.direct) return null
+  return { url: playInfo.direct, type: kwGuessType(playInfo.direct) }
 }
 
 function kgDurationMs(musicInfo) {
@@ -667,16 +753,17 @@ function kgBase64Text(value) {
   }
 }
 
-async function kgLyric(hash, musicInfo) {
-  const keyword = [musicInfo && musicInfo.name, musicInfo && musicInfo.singer]
-    .filter(Boolean)
-    .join(' ')
+async function kgLyric(hash, musicInfo, playInfo) {
+  const name = (musicInfo && musicInfo.name) || (playInfo && playInfo.name) || ''
+  const singer = (musicInfo && musicInfo.singer) || (playInfo && playInfo.singer) || ''
+  const keyword = [name, singer].filter(Boolean).join(' ')
+  const duration = kgDurationMs(musicInfo) || (playInfo && playInfo.duration) || 0
   const query = [
     'ver=1',
     'man=yes',
     'client=mobi',
     'keyword=' + encodeURIComponent(keyword || ''),
-    'duration=' + (kgDurationMs(musicInfo) || -1),
+    'duration=' + (duration || -1),
     'hash=' + encodeURIComponent(hash),
   ]
   const search = await requestJson(KG_LYRIC_SEARCH_URL + '?' + query.join('&'), {
@@ -697,7 +784,7 @@ async function kgLyric(hash, musicInfo) {
         encodeURIComponent(candidate.accesskey),
       { method: 'GET', headers: KG_LYRIC_HEADERS },
     )
-    const lyric = kgBase64Text(download && download.content)
+    const lyric = kgBase64Text(download && download.content).replace(/^\uFEFF/, '')
     if (lyric.trim()) return { lyric: lyric }
   }
   return null
@@ -705,31 +792,35 @@ async function kgLyric(hash, musicInfo) {
 
 async function handleKg(action, info) {
   const musicInfo = (info && info.musicInfo) || {}
-  const quality = (info && info.type) || '128k'
+  const meta =
+    musicInfo.meta && typeof musicInfo.meta === 'object' ? musicInfo.meta : {}
+  const h128 = kgHashFor(musicInfo, meta, '128', null)
+  if (!h128) return null
+
+  // 顺手取一次官方 songinfo，补 320/无损 hash、封面与时长
+  const playInfo = await kgPlayInfo(h128)
 
   if (action === 'pic') {
-    const url = pickHttpUrl(musicInfo.img)
+    const url = pickHttpUrl(musicInfo.img) || (playInfo && playInfo.pic) || ''
     return url ? { url: url } : null
   }
 
-  const h128 = kgPickHash(musicInfo, '128')
-  if (!h128) return null
-
-  if (action === 'lyric') return kgLyric(h128, musicInfo)
+  if (action === 'lyric') return kgLyric(h128, musicInfo, playInfo)
   if (action !== 'musicUrl') return null
 
-  const levels = KG_LEVELS[quality]
+  const levels = KG_LEVELS[info && info.type]
   if (!levels) return null
 
   const tried = []
   for (let i = 0; i < levels.length; i++) {
-    const hash = kgPickHash(musicInfo, levels[i])
+    const hash = kgHashFor(musicInfo, meta, levels[i], playInfo)
     if (!hash || tried.indexOf(hash) >= 0) continue
     tried.push(hash)
     const result = await kgTrackerUrl(hash)
     if (result) return result
   }
-  return kgThirdPartyUrl(h128, KG_THIRD_LEVELS[quality] || [])
+
+  return kgDirectUrl(playInfo)
 }
 
 lx.on(lx.EVENT_NAMES.request, ({ action, source, info }) => {
@@ -750,7 +841,7 @@ lx.send(lx.EVENT_NAMES.inited, {
     },
     wy: {
       type: 'music',
-      actions: ['musicUrl', 'lyric'],
+      actions: ['musicUrl', 'lyric', 'pic'],
       qualitys: ['128k', '320k', 'flac', 'flac24bit', 'hires'],
     },
     kw: {
